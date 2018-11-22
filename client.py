@@ -56,10 +56,14 @@ class Client:
         while True:
             message = (await keyboard_reader.readline()).decode().strip()
 
-            if message == 'quit':
+            if message == '/q':
                 self.is_stopped = True
-                await self._send_quit(writer=writer)
+                await self._send_command('quit', writer=writer)
                 break
+
+            if message == '/list':
+                await self._send_command('list', writer=writer)
+                continue
 
             await self._send_message(message, writer=writer)
 
@@ -83,21 +87,28 @@ class Client:
         }))
         await writer.drain()
 
-    async def _send_quit(self, *, writer: StreamWriter):
+    async def _send_command(self, command: str, *, writer: StreamWriter):
         writer.write(encode_json({
-            'type': 'quit',
+            'type': command,
         }))
         await writer.drain()
 
+    async def _process_list(self, data: dict):
+        usernames = data.get('usernames')
+        if not isinstance(usernames, list):
+            print('Invalid server response.')
+            return
 
-
-
+        print("{} users are currently online:\n{}".format(
+            len(usernames), ', '.join(usernames)
+        ))
 
     MESSAGE_TYPE_TO_HANDLER = {
         'joined': _process_joined_the_channel,
         'quit': _process_quit_the_channel,
         'message': _process_message,
         'deny': _process_deny,
+        'list': _process_list,
     }
 
 

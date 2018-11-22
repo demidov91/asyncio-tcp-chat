@@ -72,6 +72,15 @@ async def server_handler(reader, writer, strict_ip: bool) -> None:
         if event.get('type') == 'quit':
             break
 
+        if event.get('type') == 'list':
+            await _send(writer=writer, data={
+                'type': 'list',
+                'data': {
+                    'usernames': [x.username for x in connections],
+                },
+            })
+            continue
+
         if event.get('type') == 'message':
             try:
                 await broadcast_message(text=event['data']['text'], username=username)
