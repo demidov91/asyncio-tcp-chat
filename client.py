@@ -1,3 +1,5 @@
+#!/usr/bin/python3.7
+
 import asyncio
 import logging
 import sys
@@ -14,7 +16,7 @@ logger = logging.getLogger(__name__)
 class Client:
     host = '127.0.0.1'
     port = 5555
-
+    is_stopped = False
 
     async def send(self, message: str):
         pass
@@ -28,7 +30,7 @@ class Client:
         )
 
     async def listen(self, reader: StreamReader):
-        while True:
+        while not self.is_stopped:
             try:
                 event = await read_json(reader)
             except ValueError:
@@ -55,6 +57,7 @@ class Client:
             message = (await keyboard_reader.readline()).decode().strip()
 
             if message == 'quit':
+                self.is_stopped = True
                 await self._send_quit(writer=writer)
                 break
 
@@ -68,6 +71,10 @@ class Client:
 
     async def _process_message(self, data: dict):
         print(f"{data['sender']}: {data['text']}")
+
+    async def _process_deny(self, data: dict):
+        self.is_stopped = True
+        print(f"There is a client on the same IP and port {data['port']}")
 
     async def _send_message(self, text, *, writer: StreamWriter):
         writer.write(encode_json({
@@ -84,10 +91,13 @@ class Client:
 
 
 
+
+
     MESSAGE_TYPE_TO_HANDLER = {
         'joined': _process_joined_the_channel,
         'quit': _process_quit_the_channel,
         'message': _process_message,
+        'deny': _process_deny,
     }
 
 

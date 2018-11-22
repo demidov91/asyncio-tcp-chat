@@ -1,8 +1,12 @@
+#!/usr/bin/python3.7
+
 import asyncio
 import logging
 import dataclasses
+import sys
 from asyncio.futures import CancelledError
 from asyncio.streams import StreamReader, StreamWriter
+from functools import partial
 from typing import List
 
 from helper import encode_json, read_json
@@ -13,6 +17,8 @@ class ClientConnection:
     reader: StreamReader
     writer: StreamWriter
     username: str
+    ip: str
+    port: int
 
 connections = []    # type: List[ClientConnection]
 logger = logging.getLogger(__name__)
@@ -21,12 +27,34 @@ _user_id = 0
 def get_next_username():
     global _user_id
     _user_id += 1
-    return f'User {_user_id}'
+    return f'user{_user_id}'
 
 
-async def server_handler(reader, writer) -> None:
+async def server_handler(reader, writer, strict_ip: bool) -> None:
     username = get_next_username()
-    current_connection = ClientConnection(reader, writer, username)
+
+
+    ip, port = writer.get_extra_info('peername')
+
+    if strict_ip:
+        for x in connections:
+            if x.ip == ip:
+                await _send(writer=writer, data={
+                    'type': 'deny',
+                    'data': {'port': x.port}
+                })
+                writer.close()
+                await writer.wait_closed()
+                return
+
+    current_connection = ClientConnection(
+        reader,
+        writer,
+        username=username,
+        ip=ip,
+        port=port
+    )
+
 
     await broadcast_joined(username)
     connections.append(current_connection)
@@ -103,12 +131,19 @@ async def broadcast_message(text: str, *, username: str):
     )
 
 async def _send(*, writer: StreamWriter, data: dict):
-    writer.write(encode_json(data))
-    await writer.drain()
+    try:
+        writer.write(encode_json(data))
+        await writer.drain()
+    except Exception as e:
+        logger.exception('Failed to send %s', data)
 
 
 async def run():
-    server = await asyncio.start_server(server_handler, host='0.0.0.0', port='5555')
+    server = await asyncio.start_server(
+        partial(server_handler, strict_ip='--strict-ip' in sys.argv),
+        host='0.0.0.0',
+        port='5555'
+    )
 
     try:
         await server.serve_forever()
