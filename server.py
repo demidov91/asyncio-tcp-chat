@@ -2,22 +2,16 @@
 
 import asyncio
 import logging
-import dataclasses
 import sys
 from asyncio.futures import CancelledError
 from asyncio.streams import StreamReader, StreamWriter
-from typing import List
+from typing import List, Optional
 
+from constants import ServerEvent
 from helper import encode_json, read_json
+from server_utils import ClientConnection, PrivateMessage, parse_for_private_message
 
 
-@dataclasses.dataclass
-class ClientConnection:
-    reader: StreamReader
-    writer: StreamWriter
-    username: str
-    ip: str
-    port: int
 
 connections = []    # type: List[ClientConnection]
 logger = logging.getLogger(__name__)
@@ -27,7 +21,6 @@ def get_next_username():
     global _user_id
     _user_id += 1
     return f'user{_user_id}'
-
 
 
 class ServerHandler:
@@ -53,7 +46,7 @@ class ServerHandler:
 
     async def _process_list(self, event):
         await _send(writer=self.writer, data={
-            'type': 'list',
+            'type': ServerEvent.LIST.value,
             'data': {
                 'usernames': [x.username for x in connections],
             },
@@ -61,11 +54,19 @@ class ServerHandler:
 
     async def _process_message(self, event):
         try:
-            await broadcast_message(text=event['data']['text'], username=self.username)
+            text = event['data']['text']
         except KeyError:
             logger.exception('Unexpected client message format.')
             return
 
+        private_message = parse_for_private_message(text)
+        if private_message is not None:
+            private_message.send_from = self.username
+            await _send_private_message(private_message)
+            return
+
+        try:
+            await _broadcast_message(text=text, username=self.username)
         except Exception:
             logger.exception('Unexpected exception while broadcasting a message.')
             return
@@ -80,7 +81,7 @@ class ServerHandler:
             for x in connections:
                 if x.ip == ip:
                     await _send(writer=self.writer, data={
-                        'type': 'deny',
+                        'type': ServerEvent.DENY.value,
                         'data': {'port': x.port}
                     })
                     self.writer.close()
@@ -97,6 +98,11 @@ class ServerHandler:
 
         await broadcast_joined(self.username)
         connections.append(self.current_connection)
+        await _send_text_message(
+            message_type=ServerEvent.SYSTEM_MESSAGE,
+            connection=self.current_connection,
+            text=f"You've been connected as {self.username}."
+        )
 
     async def finalize(self):
         connections.remove(self.current_connection)
@@ -121,8 +127,11 @@ class ServerHandler:
                 logger.error("Event %s cant be handled.", event.get('type'))
                 continue
 
-            await event_handler(event)
-
+            try:
+                await event_handler(event)
+            except Exception as e:
+                logger.exception("Unexpected exception while handling event %s", event)
+                continue
 
 
 async def handler_factory(reader, writer):
@@ -161,17 +170,56 @@ async def broadcast_quit(username: str):
     )
 
 
-async def broadcast_message(text: str, *, username: str):
+async def _broadcast_message(text: str, *, username: str):
     logger.info('Message (%s): %s', username, text)
     await asyncio.gather(
         *(
-            _send(writer=x.writer, data={
-                'type': 'message',
-                'data': {'text': text, 'sender': username, },
-            })
+            _send_text_message(
+                message_type=ServerEvent.BROADCAST_MESSAGE,
+                connection=x, text=text, sender=username
+            )
             for x in connections if x.username != username
         )
     )
+
+def get_connection(username: str) -> Optional[ClientConnection]:
+    return next(filter(lambda x: x.username == username, connections), None)
+
+async def _send_private_message(msg: PrivateMessage):
+    logger.debug('%s -> %s: %s', msg.send_from, msg.send_to, msg.text)
+
+    connection = get_connection(msg.send_to)
+
+    if connection is None:
+        connection = get_connection(msg.send_from)
+
+        if connection is not None:
+            await _send_text_message(
+                message_type=ServerEvent.SYSTEM_MESSAGE,
+                connection=connection,
+                text=f'User {msg.send_to} was not found.'
+            )
+        return
+
+    await _send_text_message(
+        message_type=ServerEvent.PRIVATE_MESSAGE,
+        connection=connection,
+        text=msg.text,
+        sender=msg.send_from,
+    )
+
+async def _send_text_message(
+        *,
+        message_type: ServerEvent,
+        connection: ClientConnection,
+        text: str,
+        sender: Optional[str]=None,
+):
+    await _send(writer=connection.writer, data={
+        'type': message_type.value,
+        'data': {'text': text, 'sender': sender, },
+    })
+
 
 async def _send(*, writer: StreamWriter, data: dict):
     try:

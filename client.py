@@ -6,6 +6,7 @@ import sys
 
 from asyncio.streams import StreamReader, StreamWriter, StreamReaderProtocol
 
+from constants import ServerEvent
 from helper import read_json, encode_json
 
 
@@ -40,11 +41,13 @@ class Client:
             if event is None:
                 break
 
-            if 'type' not in event:
+            try:
+                event_type = ServerEvent(event.get('type'))
+            except ValueError:
                 logger.error(f'Unrecognized format: {event}')
                 continue
 
-            await self.MESSAGE_TYPE_TO_HANDLER.get(event['type'])(
+            await self.MESSAGE_TYPE_TO_HANDLER[event_type](
                 self, event.get('data')
             )
 
@@ -73,8 +76,14 @@ class Client:
     async def _process_quit_the_channel(self, data: dict):
         print(f"{data['username']} quit the channel")
 
-    async def _process_message(self, data: dict):
+    async def _process_broadcast_message(self, data: dict):
         print(f"{data['sender']}: {data['text']}")
+
+    async def _process_private_message(self, data: dict):
+        print(f"{data['sender']} (private): {data['text']}")
+
+    async def _process_system_message(self, data: dict):
+        print(f"{data['text']}")
 
     async def _process_deny(self, data: dict):
         self.is_stopped = True
@@ -104,11 +113,13 @@ class Client:
         ))
 
     MESSAGE_TYPE_TO_HANDLER = {
-        'joined': _process_joined_the_channel,
-        'quit': _process_quit_the_channel,
-        'message': _process_message,
-        'deny': _process_deny,
-        'list': _process_list,
+        ServerEvent.JOINED: _process_joined_the_channel,
+        ServerEvent.QUIT: _process_quit_the_channel,
+        ServerEvent.BROADCAST_MESSAGE: _process_broadcast_message,
+        ServerEvent.PRIVATE_MESSAGE: _process_private_message,
+        ServerEvent.SYSTEM_MESSAGE: _process_system_message,
+        ServerEvent.DENY: _process_deny,
+        ServerEvent.LIST: _process_list,
     }
 
 
