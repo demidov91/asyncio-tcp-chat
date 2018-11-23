@@ -6,7 +6,6 @@ import dataclasses
 import sys
 from asyncio.futures import CancelledError
 from asyncio.streams import StreamReader, StreamWriter
-from functools import partial
 from typing import List
 
 from helper import encode_json, read_json
@@ -30,72 +29,107 @@ def get_next_username():
     return f'user{_user_id}'
 
 
-async def server_handler(reader, writer, strict_ip: bool) -> None:
-    username = get_next_username()
 
+class ServerHandler:
+    reader = None
+    writer = None
+    is_stopped = False  # type: bool
+    username = None     # type: str
+    command_handlers = None     # type: dict
+    current_connection = None   # type: ClientConnection
 
-    ip, port = writer.get_extra_info('peername')
+    def __init__(self, reader, writer):
+        self.reader = reader
+        self.writer = writer
 
-    if strict_ip:
-        for x in connections:
-            if x.ip == ip:
-                await _send(writer=writer, data={
-                    'type': 'deny',
-                    'data': {'port': x.port}
-                })
-                writer.close()
-                await writer.wait_closed()
-                return
+        self.command_handlers = {
+            'list': self._process_list,
+            'message': self._process_message,
+            'quit': self._process_quit,
+        }
 
-    current_connection = ClientConnection(
-        reader,
-        writer,
-        username=username,
-        ip=ip,
-        port=port
-    )
+    async def _process_quit(self, event):
+        self.is_stopped = True
 
+    async def _process_list(self, event):
+        await _send(writer=self.writer, data={
+            'type': 'list',
+            'data': {
+                'usernames': [x.username for x in connections],
+            },
+        })
 
-    await broadcast_joined(username)
-    connections.append(current_connection)
-
-    while True:
+    async def _process_message(self, event):
         try:
-            event = await read_json(reader)
-        except ValueError:
+            await broadcast_message(text=event['data']['text'], username=self.username)
+        except KeyError:
             logger.exception('Unexpected client message format.')
-            continue
+            return
 
-        if event is None:
-            break
+        except Exception:
+            logger.exception('Unexpected exception while broadcasting a message.')
+            return
 
-        if event.get('type') == 'quit':
-            break
 
-        if event.get('type') == 'list':
-            await _send(writer=writer, data={
-                'type': 'list',
-                'data': {
-                    'usernames': [x.username for x in connections],
-                },
-            })
-            continue
+    async def initialize(self, strict_ip: bool=False):
+        self.username = get_next_username()
 
-        if event.get('type') == 'message':
+        ip, port = self.writer.get_extra_info('peername')
+
+        if strict_ip:
+            for x in connections:
+                if x.ip == ip:
+                    await _send(writer=self.writer, data={
+                        'type': 'deny',
+                        'data': {'port': x.port}
+                    })
+                    self.writer.close()
+                    await self.writer.wait_closed()
+                    return
+
+        self.current_connection = ClientConnection(
+            self.reader,
+            self.writer,
+            username=self.username,
+            ip=ip,
+            port=port
+        )
+
+        await broadcast_joined(self.username)
+        connections.append(self.current_connection)
+
+    async def finalize(self):
+        connections.remove(self.current_connection)
+        await broadcast_quit(username=self.username)
+        self.writer.close()
+
+
+    async def handle(self) -> None:
+        while not self.is_stopped:
             try:
-                await broadcast_message(text=event['data']['text'], username=username)
-            except KeyError:
+                event = await read_json(self.reader)
+            except ValueError:
                 logger.exception('Unexpected client message format.')
                 continue
 
-            except Exception:
-                logger.exception('Unexpected exception while broadcasting a message.')
+            if event is None:
+                logger.error('Message was not parsed.')
                 continue
 
-    connections.remove(current_connection)
-    await broadcast_quit(username=username)
+            event_handler = self.command_handlers.get(event.get('type'))
+            if event_handler is None:
+                logger.error("Event %s cant be handled.", event.get('type'))
+                continue
 
-    writer.close()
+            await event_handler(event)
+
+
+
+async def handler_factory(reader, writer):
+    handler_instance = ServerHandler(reader, writer)
+    await handler_instance.initialize(strict_ip='--strict-ip' in sys.argv)
+    await handler_instance.handle()
+    await handler_instance.finalize()
 
 
 async def broadcast_joined(username: str):
@@ -149,7 +183,7 @@ async def _send(*, writer: StreamWriter, data: dict):
 
 async def run():
     server = await asyncio.start_server(
-        partial(server_handler, strict_ip='--strict-ip' in sys.argv),
+        handler_factory,
         host='0.0.0.0',
         port='5555'
     )
