@@ -86,6 +86,7 @@ class ServerHandler:
                     })
                     self.writer.close()
                     await self.writer.wait_closed()
+                    self.is_stopped = True
                     return
 
         self.current_connection = ClientConnection(
@@ -105,8 +106,10 @@ class ServerHandler:
         )
 
     async def finalize(self):
-        connections.remove(self.current_connection)
-        await broadcast_quit(username=self.username)
+        if self.current_connection is not None:
+            connections.remove(self.current_connection)
+            await broadcast_quit(username=self.username)
+
         self.writer.close()
 
 
@@ -116,6 +119,11 @@ class ServerHandler:
                 event = await read_json(self.reader)
             except ValueError:
                 logger.exception('Unexpected client message format.')
+                continue
+
+            except ConnectionAbortedError:
+                logger.info('Connection was closed by client %s.', self.username)
+                self.is_stopped = True
                 continue
 
             if event is None:

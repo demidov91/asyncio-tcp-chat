@@ -7,6 +7,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+
 def encode_json(data: dict) -> bytes:
     payload = json.dumps(data).encode()
     length_encoded = len(payload).to_bytes(length=2, byteorder='big')
@@ -15,7 +16,12 @@ def encode_json(data: dict) -> bytes:
 
 
 async def read_json(reader: StreamReader) -> Optional[dict]:
-    length = int.from_bytes(await reader.read(2), byteorder='big')
+    length_bytes = await reader.read(2)
+
+    if length_bytes == b'':
+        raise ConnectionAbortedError()
+
+    length = int.from_bytes(length_bytes, byteorder='big')
     if not length:
         return None
 

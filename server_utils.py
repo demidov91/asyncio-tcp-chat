@@ -27,4 +27,3 @@ def parse_for_private_message(text: str) -> Optional[PrivateMessage]:
         return None
 
     return PrivateMessage(send_to=text[1:name_end_index], text=text[name_end_index:])
-

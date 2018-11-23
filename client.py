@@ -38,6 +38,13 @@ class Client:
                 logger.exception('Failed to parse the message.')
                 continue
 
+            except ConnectionAbortedError:
+                if not self.is_stopped:
+                    logger.info('Connection was closed by server.')
+
+                self.is_stopped = True
+                continue
+
             if event is None:
                 break
 
