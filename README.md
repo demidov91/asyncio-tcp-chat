@@ -2,6 +2,10 @@
 
 Small study project for a asyncio based tcp chat.
 
+Requirements: python-3.7
+
+OS: *nix - preferable, windows10 - acceptable.
+
 ### Server
 `python3.7 server.py`
 
