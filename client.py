@@ -59,12 +59,12 @@ class Client:
         while True:
             message = (await keyboard_reader.readline()).decode().strip()
 
-            if message == '/q':
+            if message == '\q':
                 self.is_stopped = True
                 await self._send_command('quit', writer=writer)
                 break
 
-            if message == '/list':
+            if message == '\list':
                 await self._send_command('list', writer=writer)
                 continue
 
